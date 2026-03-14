@@ -1,0 +1,7 @@
+{
+  "lastChangelogVersion": "0.57.1",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5",
+  "defaultThinkingLevel": "high",
+  "hideThinkingBlock": false
+}

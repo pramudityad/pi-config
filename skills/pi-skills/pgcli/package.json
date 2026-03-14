@@ -1,0 +1,14 @@
+{
+  "name": "@pi/pgcli",
+  "version": "1.0.0",
+  "description": "PostgreSQL CLI skill for pi coding agent",
+  "main": "index.js",
+  "bin": {
+    "pgcli": "./index.js"
+  },
+  "keywords": ["postgres", "cli", "database"],
+  "license": "MIT",
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}
