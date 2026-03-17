@@ -2,7 +2,7 @@
 name: ecc-build-error-resolver
 description: Build and TypeScript error resolution specialist. Fixes compilation, type errors, and build failures with minimal diffs. No refactoring, no architecture changes — just gets the build green.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-sonnet-4-20250514
+model: opencode-go/kimi-k2.5
 ---
 
 # Build Error Resolver

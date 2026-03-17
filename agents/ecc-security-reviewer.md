@@ -2,7 +2,7 @@
 name: ecc-security-reviewer
 description: Security vulnerability detection and remediation specialist. Delegates security audits before production deploys. Flags secrets, SSRF, injection, unsafe crypto, and OWASP Top 10 vulnerabilities.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-sonnet-4-20250514
+model: anthropic/claude-opus-4-6
 ---
 
 # Security Reviewer

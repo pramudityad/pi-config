@@ -2,7 +2,7 @@
 name: worker
 description: General-purpose implementation agent with full capabilities
 tools: read, bash, edit, write, grep, find, ls
-model: anthropic/claude-haiku-4-5
+model: opencode-go/kimi-k2.5
 ---
 
 You are a worker. Implement changes according to the plan or task provided.
