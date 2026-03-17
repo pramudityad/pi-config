@@ -143,4 +143,94 @@ export default function contextInspector(pi: ExtensionAPI): void {
 		filesRead.clear();
 		toolCallCounts.clear();
 	});
+
+	pi.registerCommand("context", {
+		description: "Inspect the current context window (use '/context dump' to save full JSON)",
+		handler: async (args, ctx) => {
+			const isDump = args?.trim().toLowerCase() === "dump";
+
+			if (latestMessages.length === 0) {
+				ctx.ui.notify("No context captured yet. Send a message first.", "info");
+				return;
+			}
+
+			if (isDump) {
+				// Write full messages to a JSON file
+				const timestamp = Date.now();
+				const tokens = categorizeTokens(latestMessages);
+				const dumpData = {
+					timestamp: new Date(timestamp).toISOString(),
+					tokenEstimate: tokens.total,
+					messageCount: latestMessages.length,
+					messages: latestMessages,
+				};
+
+				const tmpDir = os.tmpdir();
+				const dumpPath = path.join(tmpDir, `pi-context-dump-${timestamp}.json`);
+				fs.writeFileSync(dumpPath, JSON.stringify(dumpData, null, 2));
+				ctx.ui.notify(`Context dumped to:\n${dumpPath}`, "info");
+				return;
+			}
+
+			// Build summary report
+			const tokens = categorizeTokens(latestMessages);
+			const counts = countMessages(latestMessages);
+
+			// Get real usage if available
+			const realUsage = ctx.getContextUsage();
+
+			let report = "";
+			report += "═══════════════════════════════════════\n";
+			report += "         CONTEXT INSPECTOR\n";
+			report += "═══════════════════════════════════════\n\n";
+
+			// Token section
+			report += "Tokens (estimated):\n";
+			report += `  System prompt:      ~${formatTokenCount(tokens.system)}\n`;
+			report += `  Conversation:       ~${formatTokenCount(tokens.user + tokens.assistant)}\n`;
+			report += `  Tool results:       ~${formatTokenCount(tokens.toolResult)}\n`;
+			report += `  Total:              ~${formatTokenCount(tokens.total)}\n`;
+
+			if (realUsage) {
+				report += `\n  Real usage:         ${formatTokenCount(realUsage.tokens)} tokens\n`;
+			}
+
+			// Messages section
+			report += `\nMessages:             ${counts.total}\n`;
+			report += `  System:              ${counts.system}\n`;
+			report += `  User:               ${counts.user}\n`;
+			report += `  Assistant:          ${counts.assistant}\n`;
+			report += `  Tool results:        ${counts.toolResult}\n`;
+
+			// Tool calls section
+			if (toolCallCounts.size > 0) {
+				const totalCalls = Array.from(toolCallCounts.values()).reduce((a, b) => a + b, 0);
+				report += `\nTool Calls:           ${totalCalls}\n`;
+				const sorted = [...toolCallCounts.entries()].sort((a, b) => b[1] - a[1]);
+				for (const [name, count] of sorted) {
+					report += `  ${name}:${" ".repeat(Math.max(1, 20 - name.length - 1))}${count}\n`;
+				}
+			}
+
+			// Files read section
+			if (filesRead.size > 0) {
+				report += `\nFiles Read:            ${filesRead.size}\n`;
+				const sorted = [...filesRead.entries()].sort((a, b) => b[1].count - a[1].count);
+				for (const [filePath, entry] of sorted) {
+					const short = shortenPath(filePath);
+					const countStr = entry.count > 1 ? ` ×${entry.count}` : "";
+					report += `  ${short}${countStr}\n`;
+				}
+
+				const duplicates = sorted.filter(([, e]) => e.count > 1);
+				if (duplicates.length > 0) {
+					report += `\n───────────────────────────────────────\n`;
+					report += `Duplicates:  ${duplicates.length} file${duplicates.length > 1 ? "s" : ""} read more than once\n`;
+					report += `───────────────────────────────────────\n`;
+				}
+			}
+
+			ctx.ui.notify(report, "info");
+		},
+	});
 }
