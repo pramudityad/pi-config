@@ -56,6 +56,8 @@ Safe commands (allowed):
 - Git read: `git status`, `git log`, `git diff`, `git branch`
 - Package info: `npm list`, `npm outdated`, `yarn info`
 - System info: `uname`, `whoami`, `date`, `uptime`
+- ClickUp read: `npx @krodak/clickup-cli task|sprint|summary|subtasks|comments|activity|tasks|overdue|inbox|search`
+- Jira read: `jiracli view`, `jiracli list`
 
 Blocked commands:
 - File modification: `rm`, `mv`, `cp`, `mkdir`, `touch`
@@ -63,3 +65,5 @@ Blocked commands:
 - Package install: `npm install`, `yarn add`, `pip install`
 - System: `sudo`, `kill`, `reboot`
 - Editors: `vim`, `nano`, `code`
+- ClickUp write: `clickup-cli update|comment|create|assign`
+- Jira write: `jiracli comment|transition|assign`

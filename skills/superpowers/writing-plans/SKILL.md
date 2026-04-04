@@ -13,9 +13,22 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** This should be run in a dedicated worktree (created by git-worktrees skill).
+**Prerequisite:** Should be run in a dedicated worktree (created by git-worktrees skill, typically invoked by brainstorming).
 
 **Save plans to:** `docs/plans/YYYY-MM-DD-<feature-name>.md`
+
+## Worktree Verification
+
+**If invoked directly (not via brainstorming):**
+
+Check if currently in a worktree:
+```bash
+git worktree list | grep -q "$(pwd)" && echo "in worktree" || echo "not in worktree"
+```
+
+**If not in worktree:**
+- Ask user: "Not in a worktree. Continue here or create one first with git-worktrees skill?"
+- Respect user's choice - small/simple plans may not need isolation
 
 ## Bite-Sized Task Granularity
 

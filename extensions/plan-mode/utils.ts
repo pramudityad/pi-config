@@ -38,6 +38,10 @@ const DESTRUCTIVE_PATTERNS = [
 	/\bsystemctl\s+(start|stop|restart|enable|disable)/i,
 	/\bservice\s+\S+\s+(start|stop|restart)/i,
 	/\b(vim?|nano|emacs|code|subl)\b/i,
+	// ClickUp write operations
+	/clickup-cli\s+(update|comment|create|assign)\b/i,
+	// Jira write operations
+	/jiracli\s+(comment|transition|assign)\b/i,
 ];
 
 // Safe read-only commands allowed in plan mode
@@ -92,6 +96,10 @@ const SAFE_PATTERNS = [
 	/^\s*fd\b/,
 	/^\s*bat\b/,
 	/^\s*exa\b/,
+	// ClickUp read-only operations
+	/^\s*npx\s+@krodak\/clickup-cli\s+(task|sprint|summary|subtasks|comments|activity|tasks|overdue|inbox|search)\b/i,
+	// Jira read-only operations
+	/^\s*jiracli\s+(view|list)\b/i,
 ];
 
 export function isSafeCommand(command: string): boolean {

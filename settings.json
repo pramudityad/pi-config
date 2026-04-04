@@ -1,7 +1,11 @@
 {
-  "lastChangelogVersion": "0.58.4",
-  "defaultProvider": "anthropic",
-  "defaultModel": "claude-opus-4-6",
+  "lastChangelogVersion": "0.64.0",
+  "defaultProvider": "zai",
+  "defaultModel": "glm-5",
   "defaultThinkingLevel": "high",
-  "hideThinkingBlock": false
+  "hideThinkingBlock": false,
+  "theme": "monochrome-teal",
+  "treeFilterMode": "all",
+  "quietStartup": true,
+  "steeringMode": "one-at-a-time"
 }

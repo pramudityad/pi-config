@@ -28,7 +28,8 @@ You MUST create a task for each of these items and complete them in order:
 3. **Propose 2-3 approaches** — with trade-offs and your recommendation
 4. **Present design** — in sections scaled to their complexity, get user approval after each section
 5. **Write design doc** — save to `docs/plans/YYYY-MM-DD-<topic>-design.md`
-6. **Transition to implementation** — invoke writing-plans skill to create implementation plan
+6. **Create worktree** — invoke git-worktrees skill to create isolated workspace
+7. **Transition to implementation** — invoke writing-plans skill (inside worktree) to create implementation plan
 
 ## Process Flow
 
@@ -40,7 +41,8 @@ flowchart TD
     D --> E{User approves design?}
     E -->|no, revise| D
     E -->|yes| F["Write design doc"]
-    F --> G["Invoke writing-plans skill"]
+    F --> G["Invoke git-worktrees skill"]
+    G --> H["Invoke writing-plans skill"]
 ```
 
 **The terminal state is invoking writing-plans.** Do NOT invoke frontend-design, mcp-builder, or any other implementation skill. The ONLY skill you invoke after brainstorming is writing-plans.
@@ -69,11 +71,15 @@ flowchart TD
 ## After the Design
 
 **Documentation:**
-- Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md`
+- Write the validated design to `docs/plans/YYYY-MM-DD-<topic>-design.md` (in main repo)
+
+**Worktree Setup:**
+- Invoke the git-worktrees skill to create an isolated workspace
+- This ensures the implementation plan lives in the worktree from the start
 
 **Implementation:**
-- Invoke the writing-plans skill to create a detailed implementation plan
-- Do NOT invoke any other skill. writing-plans is the next step.
+- Invoke the writing-plans skill (inside the worktree) to create a detailed implementation plan
+- Do NOT invoke any other skill. git-worktrees → writing-plans is the next step.
 
 ## Key Principles
 

@@ -1,56 +1,25 @@
+# Subagent-Development Skill Improvements Implementation Plan
+
+> **For AI:** REQUIRED SUB-SKILL: Use executing-plans to implement this plan task-by-task.
+
+**Goal:** Improve the subagent-development skill with clear mode selection, concrete subagent syntax, inline review checklists, and error handling.
+
+**Architecture:** Single-file refactor of SKILL.md with targeted additions: mode selection section, restructured hybrid approach, inline spec compliance checklist, review loop limits, and subagent tool syntax examples.
+
+**Tech Stack:** Markdown, Pi skill format (YAML frontmatter + markdown)
+
 ---
-name: subagent-development
-description: Use when executing implementation plans with independent tasks in the current session
----
 
-# Subagent-Driven Development
+## Task 1: Add Mode Selection Section
 
-Execute plan by dispatching fresh subagent per task, with two-stage review after each: spec compliance review first, then code quality review.
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
 
-**Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
+**Step 1: Add mode selection after "The Process" flowchart**
 
-## When to Use
+Insert new section before "The Pattern":
 
-```mermaid
-flowchart TD
-    A{"Have implementation plan?"} -->|yes| B{"Tasks mostly independent?"}
-    A -->|no| C["Manual execution or brainstorm first"]
-    B -->|yes| D{"Stay in this session?"}
-    B -->|no| C
-    D -->|yes| E["subagent-development"]
-    D -->|no| F["executing-plans"]
-```
-
-**vs. Executing Plans (parallel session):**
-- Same session (no context switch)
-- Fresh subagent per task (no context pollution)
-- Two-stage review after each task: spec compliance first, then code quality
-- Faster iteration (no human-in-loop between tasks)
-
-## The Process
-
-```mermaid
-flowchart TD
-    A["Read plan, extract all tasks with full text, note context, create todos"] --> B{More tasks remain?}
-    B -->|yes| C["Dispatch implementer subagent"]
-    C --> D{Implementer asks questions?}
-    D -->|yes| E["Answer questions, provide context"]
-    E --> C
-    D -->|no| F["Implementer implements, tests, commits, self-reviews"]
-    F --> G["Dispatch spec compliance reviewer"]
-    G --> H{Reviewer confirms spec compliant?}
-    H -->|no| I["Implementer fixes spec gaps"]
-    I --> G
-    H -->|yes| J["Dispatch code quality reviewer"]
-    J --> K{Reviewer approves?}
-    K -->|no| L["Implementer fixes quality issues"]
-    L --> J
-    K -->|yes| M["Mark task complete"]
-    M --> B
-    B -->|no| N["Dispatch final code reviewer for entire implementation"]
-    N --> O["Use finishing-development"]
-```
-
+```markdown
 ### 0. Select Mode
 
 Before starting execution, ask the user:
@@ -63,31 +32,22 @@ Before starting execution, ask the user:
 If Extension Mode is selected but required agents are not found, inform the user and fall back to Manual Mode:
 
 > "Extension Mode requires agent definitions in `.pi/agents/`. I don't see them, so I'll use Manual Mode instead."
+```
 
-## The Pattern
+---
 
-### 1. Read Plan Once
-- Extract all tasks with full text and context
-- Create todo items for each task
+## Task 2: Restructure Hybrid Approach Section
 
-### 2. Per Task: Dispatch Implementer
-- Provide full task text + context
-- Implementer follows TDD (test-driven-development skill)
-- Implementer self-reviews before returning
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
 
-### 3. Per Task: Spec Compliance Review
-- Verify implementation matches spec exactly
-- Check: All requirements met? Nothing extra added?
-- If issues: Implementer fixes, review again
+**Step 1: Replace the entire "Hybrid Approach for Pi" section**
 
-### 4. Per Task: Code Quality Review
-- Check: Good test coverage? Clean code? No magic numbers?
-- If issues: Implementer fixes, review again
+Find the section starting with `## Hybrid Approach for Pi` and ending before `## Example Workflow`.
 
-### 5. After All Tasks: Final Review
-- Review entire implementation
-- Use finishing-development skill to complete
+Replace with:
 
+```markdown
 ## Manual Mode
 
 In Manual Mode, you (the agent) act as the controller while the user implements:
@@ -196,7 +156,20 @@ Use the requesting-code-review skill checklist:
 Report: PASS or FAIL with specific issues`
 })
 ```
+```
 
+---
+
+## Task 3: Add Review Loop Limit Section
+
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
+
+**Step 1: Add after the Extension Mode section**
+
+Insert before `## Example Workflow`:
+
+```markdown
 ## Review Loop Limit
 
 **Maximum 3 review cycles per task.** After 3 failed attempts, stop and escalate:
@@ -214,7 +187,81 @@ Report: PASS or FAIL with specific issues`
    - **Abort the plan** — Stop execution entirely
 
 This prevents endless loops and surfaces ambiguous specs early.
+```
 
+---
+
+## Task 4: Update Red Flags Section
+
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
+
+**Step 1: Update the Red Flags section**
+
+Find the `## Red Flags` section and replace with:
+
+```markdown
+## Red Flags
+
+**Never:**
+- Start implementation on main/master branch without explicit user consent
+- Skip reviews (spec compliance OR code quality)
+- Proceed with unfixed issues
+- Move to next task while either review has open issues
+- Start code quality review before spec compliance is approved
+- Exceed 3 review cycles without escalating to user
+
+**Always:**
+- Ask user to select mode before starting
+- Verify tests pass before offering completion options
+- Track tasks (in conversation or write to `docs/plans/<plan-name>-tasks.md`)
+- Escalate to user after 3 failed review cycles
+- Use finishing-development skill when all tasks complete
+```
+
+---
+
+## Task 5: Update Integration Section
+
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
+
+**Step 1: Update the Integration section**
+
+Find the `## Integration` section and update:
+
+```markdown
+## Integration
+
+**Required workflow skills:**
+- **git-worktrees** — REQUIRED: Set up isolated workspace before starting
+- **writing-plans** — Creates the plan this skill executes
+- **finishing-development** — Complete development after all tasks
+- **requesting-code-review** — Code quality review checklist (both modes)
+
+**Subagents should use:**
+- **test-driven-development** — Follow TDD for each task
+
+**Alternative workflow:**
+- **executing-plans** — Use for parallel session instead of same-session execution
+
+**Mode selection:**
+- Manual Mode works with any Pi setup
+- Extension Mode requires `.pi/agents/` with implementer and reviewer agents
+```
+
+---
+
+## Task 6: Update Example Workflow
+
+**Files:**
+- Modify: `/Users/FLP9damarpramuditya/.pi/agent/skills/superpowers/subagent-development/SKILL.md`
+
+**Step 1: Update the Example Workflow section**
+
+Replace the `## Example Workflow` section with:
+
+```markdown
 ## Example Workflow (Manual Mode)
 
 ```
@@ -299,54 +346,15 @@ You: Checking for required agents...
 
 You: All tasks complete. Using finishing-development skill...
 ```
+```
 
-## Advantages
+---
 
-**vs. Manual execution:**
-- Structured review checkpoints
-- Two-stage quality gates: spec then code quality
-- Clear task boundaries with verification
+## Verification
 
-**Efficiency gains:**
-- Controller curates exactly what context is needed
-- Review loops ensure fixes actually work
+After all tasks complete, verify:
 
-**Quality gates:**
-- Self-review catches issues before handoff
-- Two-stage review: spec compliance, then code quality
-- Review loops ensure fixes actually work
-
-## Red Flags
-
-**Never:**
-- Start implementation on main/master branch without explicit user consent
-- Skip reviews (spec compliance OR code quality)
-- Proceed with unfixed issues
-- Move to next task while either review has open issues
-- Start code quality review before spec compliance is approved
-- Exceed 3 review cycles without escalating to user
-
-**Always:**
-- Ask user to select mode before starting
-- Verify tests pass before offering completion options
-- Track tasks (in conversation or write to `docs/plans/<plan-name>-tasks.md`)
-- Escalate to user after 3 failed review cycles
-- Use finishing-development skill when all tasks complete
-
-## Integration
-
-**Required workflow skills:**
-- **git-worktrees** — REQUIRED: Set up isolated workspace before starting
-- **writing-plans** — Creates the plan this skill executes
-- **finishing-development** — Complete development after all tasks
-- **requesting-code-review** — Code quality review checklist (both modes)
-
-**Subagents should use:**
-- **test-driven-development** — Follow TDD for each task
-
-**Alternative workflow:**
-- **executing-plans** — Use for parallel session instead of same-session execution
-
-**Mode selection:**
-- Manual Mode works with any Pi setup
-- Extension Mode requires `.pi/agents/` with implementer and reviewer agents
+1. Read the updated skill file
+2. Check all sections are present and properly formatted
+3. Verify mermaid flowcharts render correctly
+4. Confirm no broken references to other skills
