@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.64.0",
+  "lastChangelogVersion": "0.67.1",
   "defaultProvider": "zai",
-  "defaultModel": "glm-5",
+  "defaultModel": "glm-5.1",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "theme": "monochrome-teal",

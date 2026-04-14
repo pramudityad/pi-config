@@ -8,6 +8,7 @@ My custom [pi](https://github.com/marioishikawa/pi) coding agent configuration.
 .
 ├── agents/           # Custom agent definitions (10 agents)
 ├── skills/           # Custom skills for specialized tasks
+│   ├── browser-use/  # Autonomous web agent (LLM-driven)
 │   ├── clickup/
 │   ├── ecc-*/        # ECC organization standards (6 skills)
 │   ├── pi-skills/    # Built-in pi skills (10 skills)
@@ -91,9 +92,12 @@ git commit -m "feat: update agent configuration"
 - `writing-plans` - Plan creation
 - `writing-skills` - Skill development
 
+### Browser & Web
+- `browser-use` - Autonomous web agent (LLM-driven browsing)
+- `browser-tools` - Scripted browser automation (CDP)
+
 ### Pi Skills
 - `brave-search` - Web search
-- `browser-tools` - Browser automation
 - `gccli` - Google Calendar
 - `gdcli` - Google Drive
 - `gmcli` - Gmail
