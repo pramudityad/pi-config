@@ -1,10 +1,12 @@
 ---
-description: Worker implements, reviewer reviews, worker applies feedback
+description: Worker implements, reviewer reviews in a loop until approved
 ---
-Use the subagent tool with the chain parameter to execute this workflow:
+Use the subagent tool in review mode:
 
-1. First, use the "worker" agent to implement: $@
-2. Then, use the "reviewer" agent to review the implementation from the previous step (use {previous} placeholder)
-3. Finally, use the "worker" agent to apply the feedback from the review (use {previous} placeholder)
+- implementer: "worker"
+- reviewer: "reviewer"
+- task: $@
+- maxIterations: 3
+- scratchpad: true
 
-Execute this as a chain, passing output between steps via {previous}.
+Run review mode and report the final outcome.

@@ -2,6 +2,7 @@
 name: ecc-backend-reviewer
 description: Backend code review specialist. Reviews API endpoints, database queries, error handling, authentication, caching, and server-side patterns. Checks for N+1 queries, missing validation, improper error handling, and security issues in backend code.
 tools: read, grep, find, ls, bash
+skills: ecc-backend-patterns, ecc-api-design
 model: anthropic/claude-opus-4-8
 ---
 
