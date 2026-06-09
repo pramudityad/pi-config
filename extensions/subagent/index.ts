@@ -1,28 +1,30 @@
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
- * Spawns a separate `pi` process for each subagent invocation,
- * giving it an isolated context window.
+ * In-process SDK orchestrator. Each subagent is a nested AgentSession
+ * created via createAgentSession(), not a spawned process.
  *
- * Supports three modes:
+ * Supports five modes:
  *   - Single: { agent: "name", task: "..." }
- *   - Parallel: { tasks: [{ agent: "name", task: "..." }, ...] }
- *   - Chain: { chain: [{ agent: "name", task: "... {previous} ..." }, ...] }
- *
- * Uses JSON mode to capture structured output from subagents.
+ *   - Parallel: { tasks: [...] }
+ *   - Chain: { chain: [...] }
+ *   - Review 🆕: { review: { implementer, reviewer, task, maxIterations } }
+ *   - Consensus 🆕: { consensus: { agent, task, voters } }
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { Message } from "@mariozechner/pi-ai";
-import { StringEnum } from "@mariozechner/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { Message } from "@earendil-works/pi-ai";
+import { StringEnum } from "@earendil-works/pi-ai";
+import { type ExtensionAPI, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import { resolveConsensus } from "./consensus.ts";
+import { SessionCache, runSingleAgent as runAgent, finalText } from "./orchestrator.ts";
+import { createScratchpad, scratchpadNotice, cleanupScratchpad, newWorkflowId } from "./scratchpad.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -154,7 +156,7 @@ interface SingleResult {
 }
 
 interface SubagentDetails {
-	mode: "single" | "parallel" | "chain";
+	mode: "single" | "parallel" | "chain" | "review" | "consensus";
 	agentScope: AgentScope;
 	projectAgentsDir: string | null;
 	results: SingleResult[];
@@ -207,174 +209,33 @@ async function mapWithConcurrencyLimit<TIn, TOut>(
 	return results;
 }
 
-function writePromptToTempFile(agentName: string, prompt: string): { dir: string; filePath: string } {
-	const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
-	const safeName = agentName.replace(/[^\w.-]+/g, "_");
-	const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
-	fs.writeFileSync(filePath, prompt, { encoding: "utf-8", mode: 0o600 });
-	return { dir: tmpDir, filePath };
+// ─── Adapter: RunResult → SingleResult (for existing renderers) ─────────
+
+function emptyUsage(): UsageStats {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 }
 
-type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
-
-async function runSingleAgent(
-	defaultCwd: string,
-	agents: AgentConfig[],
-	agentName: string,
-	task: string,
-	cwd: string | undefined,
-	step: number | undefined,
-	signal: AbortSignal | undefined,
-	onUpdate: OnUpdateCallback | undefined,
-	makeDetails: (results: SingleResult[]) => SubagentDetails,
-): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
-
-	if (!agent) {
-		const available = agents.map((a) => `"${a.name}"`).join(", ") || "none";
-		return {
-			agent: agentName,
-			agentSource: "unknown",
-			task,
-			exitCode: 1,
-			messages: [],
-			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-			step,
-		};
-	}
-
-	const args: string[] = ["--mode", "json", "-p", "--no-session"];
-	if (agent.model) args.push("--model", agent.model);
-	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
-
-	let tmpPromptDir: string | null = null;
-	let tmpPromptPath: string | null = null;
-
-	const currentResult: SingleResult = {
-		agent: agentName,
+function toSingleResult(agent: AgentConfig, task: string, run: Awaited<ReturnType<typeof runAgent>>, step?: number): SingleResult {
+	return {
+		agent: agent.name,
 		agentSource: agent.source,
 		task,
-		exitCode: 0,
-		messages: [],
-		stderr: "",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-		model: agent.model,
+		exitCode: run.error || run.stopReason === "error" || run.stopReason === "aborted" ? 1 : 0,
+		messages: run.messages,
+		stderr: run.error ?? "",
+		usage: run.usage,
+		model: run.model ?? agent.model,
+		stopReason: run.stopReason,
+		errorMessage: run.errorMessage ?? run.error,
 		step,
 	};
-
-	const emitUpdate = () => {
-		if (onUpdate) {
-			onUpdate({
-				content: [{ type: "text", text: getFinalOutput(currentResult.messages) || "(running...)" }],
-				details: makeDetails([currentResult]),
-			});
-		}
-	};
-
-	try {
-		if (agent.systemPrompt.trim()) {
-			const tmp = writePromptToTempFile(agent.name, agent.systemPrompt);
-			tmpPromptDir = tmp.dir;
-			tmpPromptPath = tmp.filePath;
-			args.push("--append-system-prompt", tmpPromptPath);
-		}
-
-		args.push(`Task: ${task}`);
-		let wasAborted = false;
-
-		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn("pi", args, { cwd: cwd ?? defaultCwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-			let buffer = "";
-
-			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					return;
-				}
-
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					currentResult.messages.push(msg);
-
-					if (msg.role === "assistant") {
-						currentResult.usage.turns++;
-						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
-					}
-					emitUpdate();
-				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
-					emitUpdate();
-				}
-			};
-
-			proc.stdout.on("data", (data) => {
-				buffer += data.toString();
-				const lines = buffer.split("\n");
-				buffer = lines.pop() || "";
-				for (const line of lines) processLine(line);
-			});
-
-			proc.stderr.on("data", (data) => {
-				currentResult.stderr += data.toString();
-			});
-
-			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
-			});
-
-			proc.on("error", () => {
-				resolve(1);
-			});
-
-			if (signal) {
-				const killProc = () => {
-					wasAborted = true;
-					proc.kill("SIGTERM");
-					setTimeout(() => {
-						if (!proc.killed) proc.kill("SIGKILL");
-					}, 5000);
-				};
-				if (signal.aborted) killProc();
-				else signal.addEventListener("abort", killProc, { once: true });
-			}
-		});
-
-		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
-		return currentResult;
-	} finally {
-		if (tmpPromptPath)
-			try {
-				fs.unlinkSync(tmpPromptPath);
-			} catch {
-				/* ignore */
-			}
-		if (tmpPromptDir)
-			try {
-				fs.rmdirSync(tmpPromptDir);
-			} catch {
-				/* ignore */
-			}
-	}
 }
+
+function isFailedResult(r: SingleResult): boolean {
+	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+}
+
+// ─── Params ──────────────────────────────────────────────────────────────
 
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of the agent to invoke" }),
@@ -388,6 +249,19 @@ const ChainItem = Type.Object({
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
+const ReviewParams = Type.Object({
+	implementer: Type.String({ description: "Agent that implements" }),
+	reviewer: Type.String({ description: "Agent that reviews" }),
+	task: Type.String({ description: "The task to implement and review" }),
+	maxIterations: Type.Optional(Type.Number({ description: "Max impl↔review cycles. Default 3.", default: 3 })),
+});
+
+const ConsensusParams = Type.Object({
+	agent: Type.String({ description: "Agent to run repeatedly" }),
+	task: Type.String({ description: "Question to answer" }),
+	voters: Type.Optional(Type.Number({ description: "Number of independent runs. Default 3.", default: 3 })),
+});
+
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 	description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
 	default: "user",
@@ -398,10 +272,14 @@ const SubagentParams = Type.Object({
 	task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
 	chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
+	review: Type.Optional(ReviewParams),
+	consensus: Type.Optional(ConsensusParams),
 	agentScope: Type.Optional(AgentScopeSchema),
 	confirmProjectAgents: Type.Optional(
 		Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
 	),
+	scratchpad: Type.Optional(Type.Boolean({ description: "Enable a shared file-based scratchpad for this workflow.", default: false })),
+	keepScratch: Type.Optional(Type.Boolean({ description: "Keep the scratchpad file after the run (debug). Default false.", default: false })),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
@@ -411,7 +289,8 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 		description: [
 			"Delegate tasks to specialized subagents with isolated context.",
-			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+			"Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder),",
+			"review (implementer↔reviewer loop), consensus (majority voting).",
 			'Default agent scope is "user" (from ~/.pi/agent/agents).',
 			'To enable project-local agents in .pi/agents, set agentScope: "both" (or "project").',
 		].join(" "),
@@ -426,10 +305,12 @@ export default function (pi: ExtensionAPI) {
 			const hasChain = (params.chain?.length ?? 0) > 0;
 			const hasTasks = (params.tasks?.length ?? 0) > 0;
 			const hasSingle = Boolean(params.agent && params.task);
-			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
+			const hasReview = Boolean(params.review);
+			const hasConsensus = Boolean(params.consensus);
+			const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle) + Number(hasReview) + Number(hasConsensus);
 
 			const makeDetails =
-				(mode: "single" | "parallel" | "chain") =>
+				(mode: SubagentDetails["mode"]) =>
 				(results: SingleResult[]): SubagentDetails => ({
 					mode,
 					agentScope,
@@ -454,6 +335,11 @@ export default function (pi: ExtensionAPI) {
 				const requestedAgentNames = new Set<string>();
 				if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
 				if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
+				if (params.review) {
+					requestedAgentNames.add(params.review.implementer);
+					requestedAgentNames.add(params.review.reviewer);
+				}
+				if (params.consensus) requestedAgentNames.add(params.consensus.agent);
 				if (params.agent) requestedAgentNames.add(params.agent);
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
@@ -475,61 +361,108 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
-			if (params.chain && params.chain.length > 0) {
-				const results: SingleResult[] = [];
-				let previousOutput = "";
-
-				for (let i = 0; i < params.chain.length; i++) {
-					const step = params.chain[i];
-					const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
-
-					// Create update callback that includes all previous results
-					const chainUpdate: OnUpdateCallback | undefined = onUpdate
-						? (partial) => {
-								// Combine completed results with current streaming result
-								const currentResult = partial.details?.results[0];
-								if (currentResult) {
-									const allResults = [...results, currentResult];
-									onUpdate({
-										content: partial.content,
-										details: makeDetails("chain")(allResults),
-									});
-								}
-							}
-						: undefined;
-
-					const result = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						step.agent,
-						taskWithContext,
-						step.cwd,
-						i + 1,
-						signal,
-						chainUpdate,
-						makeDetails("chain"),
-					);
-					results.push(result);
-
-					const isError =
-						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-					if (isError) {
-						const errorMsg =
-							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
-						return {
-							content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
-							details: makeDetails("chain")(results),
-							isError: true,
-						};
-					}
-					previousOutput = getFinalOutput(result.messages);
+			// ─── SINGLE ──────────────────────────────────────────────────────
+			if (params.agent && params.task) {
+				const agent = agents.find((a) => a.name === params.agent);
+				if (!agent) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Unknown agent: "${params.agent}". Available: ${agents.map((a) => a.name).join(", ") || "none"}`,
+							},
+						],
+						details: makeDetails("single")([]),
+						isError: true,
+					};
 				}
+				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
+				const taskText = scratchPath ? params.task + scratchpadNotice(scratchPath) : params.task;
+				const run = await runAgent(agent, taskText, {
+					cwd: params.cwd ?? ctx.cwd,
+					scratchpadPath: scratchPath,
+					signal,
+					onUpdate: onUpdate
+						? (msgs) =>
+							onUpdate({
+								content: [{ type: "text", text: finalText(msgs) || "(running...)" }],
+								details: makeDetails("single")([{ ...toSingleResult(agent, params.task, { messages: msgs, usage: emptyUsage() }), step: undefined }]),
+							})
+						: undefined,
+				});
+				if (scratchPath) cleanupScratchpad(scratchPath, params.keepScratch ?? false);
+				const sr = toSingleResult(agent, params.task, run);
+				const isError = isFailedResult(sr);
 				return {
-					content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
-					details: makeDetails("chain")(results),
+					content: [{ type: "text", text: isError ? (sr.errorMessage || "(failed)") : (finalText(run.messages) || "(no output)") }],
+					details: makeDetails("single")([sr]),
+					isError,
 				};
 			}
 
+			// ─── CHAIN ───────────────────────────────────────────────────────
+			if (params.chain && params.chain.length > 0) {
+				const cache = new SessionCache();
+				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
+				const results: SingleResult[] = [];
+				let previousOutput = "";
+				try {
+					for (let i = 0; i < params.chain.length; i++) {
+						const step = params.chain[i];
+						const agent = agents.find((a) => a.name === step.agent);
+						if (!agent) {
+							results.push({
+								agent: step.agent,
+								agentSource: "unknown",
+								task: step.task,
+								exitCode: 1,
+								messages: [],
+								stderr: `Unknown agent: "${step.agent}"`,
+								usage: emptyUsage(),
+								step: i + 1,
+							});
+							return {
+								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): unknown agent` }],
+								details: makeDetails("chain")(results),
+								isError: true,
+							};
+						}
+						let task = step.task.replace(/\{previous\}/g, previousOutput);
+						if (scratchPath) task += scratchpadNotice(scratchPath);
+						const run = await runAgent(agent, task, {
+							cwd: step.cwd ?? ctx.cwd,
+							scratchpadPath: scratchPath,
+							signal,
+							onUpdate: onUpdate
+								? (msgs) =>
+									onUpdate({
+										content: [{ type: "text", text: finalText(msgs) }],
+										details: makeDetails("chain")([...results, { ...toSingleResult(agent, task, { messages: msgs, usage: emptyUsage() }, i + 1) }]),
+									})
+								: undefined,
+						}, cache);
+						const sr = toSingleResult(agent, task, run, i + 1);
+						results.push(sr);
+						if (isFailedResult(sr)) {
+							return {
+								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${sr.errorMessage || "(no output)"}` }],
+								details: makeDetails("chain")(results),
+								isError: true,
+							};
+						}
+						previousOutput = finalText(run.messages);
+					}
+					return {
+						content: [{ type: "text", text: finalText(results[results.length - 1].messages) || "(no output)" }],
+						details: makeDetails("chain")(results),
+					};
+				} finally {
+					cache.disposeAll();
+					if (scratchPath) cleanupScratchpad(scratchPath, params.keepScratch ?? false);
+				}
+			}
+
+			// ─── PARALLEL ────────────────────────────────────────────────────
 			if (params.tasks && params.tasks.length > 0) {
 				if (params.tasks.length > MAX_PARALLEL_TASKS)
 					return {
@@ -542,19 +475,16 @@ export default function (pi: ExtensionAPI) {
 						details: makeDetails("parallel")([]),
 					};
 
-				// Track all results for streaming updates
 				const allResults: SingleResult[] = new Array(params.tasks.length);
-
-				// Initialize placeholder results
 				for (let i = 0; i < params.tasks.length; i++) {
 					allResults[i] = {
 						agent: params.tasks[i].agent,
 						agentSource: "unknown",
 						task: params.tasks[i].task,
-						exitCode: -1, // -1 = still running
+						exitCode: -1,
 						messages: [],
 						stderr: "",
-						usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+						usage: emptyUsage(),
 					};
 				}
 
@@ -563,42 +493,45 @@ export default function (pi: ExtensionAPI) {
 						const running = allResults.filter((r) => r.exitCode === -1).length;
 						const done = allResults.filter((r) => r.exitCode !== -1).length;
 						onUpdate({
-							content: [
-								{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` },
-							],
+							content: [{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` }],
 							details: makeDetails("parallel")([...allResults]),
 						});
 					}
 				};
 
 				const results = await mapWithConcurrencyLimit(params.tasks, MAX_CONCURRENCY, async (t, index) => {
-					const result = await runSingleAgent(
-						ctx.cwd,
-						agents,
-						t.agent,
-						t.task,
-						t.cwd,
-						undefined,
+					const agent = agents.find((a) => a.name === t.agent);
+					if (!agent) {
+						allResults[index] = {
+							agent: t.agent,
+							agentSource: "unknown",
+							task: t.task,
+							exitCode: 1,
+							messages: [],
+							stderr: `Unknown agent: "${t.agent}"`,
+							usage: emptyUsage(),
+						};
+						emitParallelUpdate();
+						return allResults[index];
+					}
+					const run = await runAgent(agent, t.task, {
+						cwd: t.cwd ?? ctx.cwd,
 						signal,
-						// Per-task update callback
-						(partial) => {
-							if (partial.details?.results[0]) {
-								allResults[index] = partial.details.results[0];
-								emitParallelUpdate();
-							}
+						onUpdate: (msgs) => {
+							allResults[index] = { ...toSingleResult(agent, t.task, { messages: msgs, usage: emptyUsage() }), step: undefined };
+							emitParallelUpdate();
 						},
-						makeDetails("parallel"),
-					);
-					allResults[index] = result;
+					});
+					allResults[index] = toSingleResult(agent, t.task, run);
 					emitParallelUpdate();
-					return result;
+					return allResults[index];
 				});
 
-				const successCount = results.filter((r) => r.exitCode === 0).length;
+				const successCount = results.filter((r) => !isFailedResult(r)).length;
 				const summaries = results.map((r) => {
-					const output = getFinalOutput(r.messages);
+					const output = finalText(r.messages);
 					const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+					return `[${r.agent}] ${!isFailedResult(r) ? "completed" : "failed"}: ${preview || "(no output)"}`;
 				});
 				return {
 					content: [
@@ -611,34 +544,80 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			if (params.agent && params.task) {
-				const result = await runSingleAgent(
-					ctx.cwd,
-					agents,
-					params.agent,
-					params.task,
-					params.cwd,
-					undefined,
-					signal,
-					onUpdate,
-					makeDetails("single"),
-				);
-				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
-				if (isError) {
-					const errorMsg =
-						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+			// ─── REVIEW ─────────────────────────────────────────────────────
+			if (params.review) {
+				const { implementer, reviewer, task, maxIterations = 3 } = params.review;
+				const impl = agents.find((a) => a.name === implementer);
+				const rev = agents.find((a) => a.name === reviewer);
+				if (!impl || !rev) {
 					return {
-						content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
-						details: makeDetails("single")([result]),
+						content: [{ type: "text", text: `Unknown agent(s). Available: ${agents.map((a) => a.name).join(", ")}` }],
+						details: makeDetails("chain")([]),
 						isError: true,
 					};
 				}
+				const cache = new SessionCache();
+				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
+				const results: SingleResult[] = [];
+				try {
+					let implTask = task + (scratchPath ? scratchpadNotice(scratchPath) : "");
+					let approved = false;
+					for (let i = 0; i < maxIterations; i++) {
+						const ir = await runAgent(impl, implTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
+						results.push(toSingleResult(impl, implTask, ir, results.length + 1));
+						if (isFailedResult(results[results.length - 1])) break;
+						const reviewTask = `Review this work and reply with APPROVED on its own line if acceptable, otherwise list required changes:\n\n${finalText(ir.messages)}` + (scratchPath ? scratchpadNotice(scratchPath) : "");
+						const rr = await runAgent(rev, reviewTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
+						results.push(toSingleResult(rev, reviewTask, rr, results.length + 1));
+						const verdict = finalText(rr.messages);
+						if (/^\s*APPROVED\s*$/m.test(verdict)) {
+							approved = true;
+							break;
+						}
+						implTask = `Address this review feedback and revise:\n\n${verdict}` + (scratchPath ? scratchpadNotice(scratchPath) : "");
+					}
+					const summary = approved ? "Review passed." : `Review did not converge within ${maxIterations} iterations.`;
+					return {
+						content: [{ type: "text", text: `${summary}\n\n${finalText(results[results.length - 1].messages)}` }],
+						details: makeDetails("chain")(results),
+						isError: !approved,
+					};
+				} finally {
+					cache.disposeAll();
+					if (scratchPath) cleanupScratchpad(scratchPath, params.keepScratch ?? false);
+				}
+			}
+
+			// ─── CONSENSUS ───────────────────────────────────────────────────
+			if (params.consensus) {
+				const { agent: agentName, task, voters = 3 } = params.consensus;
+				const agent = agents.find((a) => a.name === agentName);
+				if (!agent) {
+					return {
+						content: [{ type: "text", text: `Unknown agent: "${agentName}"` }],
+						details: makeDetails("parallel")([]),
+						isError: true,
+					};
+				}
+				const tasks = Array.from({ length: Math.min(voters, MAX_PARALLEL_TASKS) }, () => task);
+				const runs = await mapWithConcurrencyLimit(tasks, MAX_CONCURRENCY, async (t) =>
+					runAgent(agent, t, { cwd: ctx.cwd, signal }),
+				);
+				const results = runs.map((r, i) => toSingleResult(agent, `vote ${i + 1}`, r, i + 1));
+				const answers = runs.map((r) => finalText(r.messages));
+				const verdict = resolveConsensus(answers);
+				let text: string;
+				if (verdict.status === "agreed") text = `Consensus (unanimous, ${voters} voters): ${verdict.answer}`;
+				else if (verdict.status === "majority") text = `Consensus (majority): ${verdict.answer}\nDissenting: ${verdict.dissenters.join(" | ")}`;
+				else text = `No consensus (tie). Answers:\n${verdict.all.map((a, i) => `  ${i + 1}. ${a}`).join("\n")}`;
 				return {
-					content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
-					details: makeDetails("single")([result]),
+					content: [{ type: "text", text }],
+					details: makeDetails("parallel")(results),
+					isError: verdict.status === "tie",
 				};
 			}
 
+			// Fallback
 			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
 			return {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
@@ -648,6 +627,26 @@ export default function (pi: ExtensionAPI) {
 
 		renderCall(args, theme) {
 			const scope: AgentScope = args.agentScope ?? "user";
+			if (args.review) {
+				let text =
+					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("accent", `review (${args.review.maxIterations ?? 3} max cycles)`) +
+					theme.fg("muted", ` [${scope}]`) +
+					`\n  ${theme.fg("accent", args.review.implementer)} ↔ ${theme.fg("accent", args.review.reviewer)}`;
+				const preview = args.review.task.length > 60 ? `${args.review.task.slice(0, 60)}...` : args.review.task;
+				text += `\n  ${theme.fg("dim", preview)}`;
+				return new Text(text, 0, 0);
+			}
+			if (args.consensus) {
+				let text =
+					theme.fg("toolTitle", theme.bold("subagent ")) +
+					theme.fg("accent", `consensus (${args.consensus.voters ?? 3} voters)`) +
+					theme.fg("muted", ` [${scope}]`) +
+					`\n  ${theme.fg("accent", args.consensus.agent)}`;
+				const preview = args.consensus.task.length > 60 ? `${args.consensus.task.slice(0, 60)}...` : args.consensus.task;
+				text += `\n  ${theme.fg("dim", preview)}`;
+				return new Text(text, 0, 0);
+			}
 			if (args.chain && args.chain.length > 0) {
 				let text =
 					theme.fg("toolTitle", theme.bold("subagent ")) +
@@ -655,7 +654,6 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("muted", ` [${scope}]`);
 				for (let i = 0; i < Math.min(args.chain.length, 3); i++) {
 					const step = args.chain[i];
-					// Clean up {previous} placeholder for display
 					const cleanTask = step.task.replace(/\{previous\}/g, "").trim();
 					const preview = cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
 					text +=
@@ -786,7 +784,7 @@ export default function (pi: ExtensionAPI) {
 				return total;
 			};
 
-			if (details.mode === "chain") {
+			if (details.mode === "chain" || details.mode === "review") {
 				const successCount = details.results.filter((r) => r.exitCode === 0).length;
 				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
 
@@ -796,7 +794,7 @@ export default function (pi: ExtensionAPI) {
 						new Text(
 							icon +
 								" " +
-								theme.fg("toolTitle", theme.bold("chain ")) +
+								theme.fg("toolTitle", theme.bold(`${details.mode} `)) +
 								theme.fg("accent", `${successCount}/${details.results.length} steps`),
 							0,
 							0,
@@ -818,7 +816,6 @@ export default function (pi: ExtensionAPI) {
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 
-						// Show tool calls
 						for (const item of displayItems) {
 							if (item.type === "toolCall") {
 								container.addChild(
@@ -831,7 +828,6 @@ export default function (pi: ExtensionAPI) {
 							}
 						}
 
-						// Show final output as markdown
 						if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -849,11 +845,10 @@ export default function (pi: ExtensionAPI) {
 					return container;
 				}
 
-				// Collapsed view
 				let text =
 					icon +
 					" " +
-					theme.fg("toolTitle", theme.bold("chain ")) +
+					theme.fg("toolTitle", theme.bold(`${details.mode} `)) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (const r of details.results) {
 					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
@@ -868,10 +863,10 @@ export default function (pi: ExtensionAPI) {
 				return new Text(text, 0, 0);
 			}
 
-			if (details.mode === "parallel") {
+			if (details.mode === "parallel" || details.mode === "consensus") {
 				const running = details.results.filter((r) => r.exitCode === -1).length;
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const successCount = details.results.filter((r) => !isFailedResult(r)).length;
+				const failCount = details.results.filter((r) => r.exitCode !== -1 && isFailedResult(r)).length;
 				const isRunning = running > 0;
 				const icon = isRunning
 					? theme.fg("warning", "⏳")
@@ -886,14 +881,18 @@ export default function (pi: ExtensionAPI) {
 					const container = new Container();
 					container.addChild(
 						new Text(
-							`${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
+							`${icon} ${theme.fg("toolTitle", theme.bold(`${details.mode} `))}${theme.fg("accent", status)}`,
 							0,
 							0,
 						),
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = r.exitCode === -1
+							? theme.fg("warning", "⏳")
+							: isFailedResult(r)
+								? theme.fg("error", "✗")
+								: theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -903,7 +902,6 @@ export default function (pi: ExtensionAPI) {
 						);
 						container.addChild(new Text(theme.fg("muted", "Task: ") + theme.fg("dim", r.task), 0, 0));
 
-						// Show tool calls
 						for (const item of displayItems) {
 							if (item.type === "toolCall") {
 								container.addChild(
@@ -916,7 +914,6 @@ export default function (pi: ExtensionAPI) {
 							}
 						}
 
-						// Show final output as markdown
 						if (finalOutput) {
 							container.addChild(new Spacer(1));
 							container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
@@ -934,15 +931,14 @@ export default function (pi: ExtensionAPI) {
 					return container;
 				}
 
-				// Collapsed view (or still running)
-				let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
+				let text = `${icon} ${theme.fg("toolTitle", theme.bold(`${details.mode} `))}${theme.fg("accent", status)}`;
 				for (const r of details.results) {
 					const rIcon =
 						r.exitCode === -1
 							? theme.fg("warning", "⏳")
-							: r.exitCode === 0
-								? theme.fg("success", "✓")
-								: theme.fg("error", "✗");
+							: isFailedResult(r)
+								? theme.fg("error", "✗")
+								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0)
