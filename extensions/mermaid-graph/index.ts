@@ -1,15 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 import { renderFlowchartPreview } from "./unicode-preview.ts";
-
-const __dir = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
-// Import the renderer's exported function without spawning a subprocess.
-const { renderDiagram } = require("./mermaid-render.mjs");
 
 const Params = Type.Object({
   mermaid: Type.String({ description: "Mermaid diagram source (flowchart, sequence, class, state, er, gantt, pie, etc.)" }),
@@ -40,6 +32,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Params,
 
     async execute(_id, params, _signal, _onUpdate, _ctx) {
+      const { renderDiagram } = await import("./mermaid-render.mjs");
       const outDir = params.outDir || "diagrams";
       const formats = params.formats || ["mmd", "svg", "png", "excalidraw"];
       try {
