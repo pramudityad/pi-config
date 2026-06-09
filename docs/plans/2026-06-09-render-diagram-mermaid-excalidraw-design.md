@@ -108,4 +108,7 @@ written file paths.
 - Live/auto-open-in-browser preview.
 - Remote rendering services.
 - Authoring `.excalidraw` JSON by hand (always go through Mermaid).
+
+## Status update
+Implemented on branch `feat/render-diagram` as `extensions/mermaid-graph/`. See README there.
 ```
