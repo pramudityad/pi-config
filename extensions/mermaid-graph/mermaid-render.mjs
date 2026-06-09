@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -7,7 +8,9 @@ import { spawnSync } from "node:child_process";
 const __dir = path.dirname(fileURLToPath(import.meta.url));
 
 // Resolve puppeteer from the browser-tools skill (shared Chromium, no extra install).
-const BROWSER_TOOLS = "/Users/FLP9damarpramuditya/.pi/agent/skills/pi-skills/browser-tools/node_modules/";
+const BROWSER_TOOLS =
+  process.env.MERMAID_BROWSER_TOOLS ||
+  path.join(os.homedir(), ".pi/agent/skills/pi-skills/browser-tools/node_modules/");
 
 function loadPuppeteer() {
   try {
@@ -15,7 +18,7 @@ function loadPuppeteer() {
     return require("puppeteer");
   } catch (e) {
     throw new Error(
-      "Puppeteer not found. Run: cd ~/.pi/agent/skills/pi-skills/browser-tools && npm install",
+      `Puppeteer not found at ${BROWSER_TOOLS}. Run: cd ~/.pi/agent/skills/pi-skills/browser-tools && npm install`,
     );
   }
 }
@@ -54,7 +57,7 @@ export async function renderDiagram({ mermaid, name, outDir = "diagrams", format
     const bundle = ensureBundle();
     const puppeteer = loadPuppeteer();
     const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><div id="root"></div><script>${bundle}</script></body></html>`;
-    const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox"] });
+    const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] });
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: "load" });
@@ -74,6 +77,7 @@ export async function renderDiagram({ mermaid, name, outDir = "diagrams", format
         // Render SVG into the page and screenshot it for a clean raster.
         await page.evaluate((svg) => { document.getElementById("root").innerHTML = svg; }, result.svg);
         const el = await page.$("#root svg");
+        if (!el) throw new Error("PNG render failed: no <svg> produced");
         const p = path.join(outDir, `${base}.png`);
         await el.screenshot({ path: p, omitBackground: true });
         written.push("png"); paths.png = p;

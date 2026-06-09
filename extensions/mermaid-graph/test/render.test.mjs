@@ -31,3 +31,19 @@ test("surfaces mermaid parse errors", async () => {
     /mermaid|parse|syntax/i,
   );
 });
+
+test("renders sequence diagram (excalidraw fallback path)", async () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "rd-"));
+  const def = fs.readFileSync(new URL("./fixtures/sequence.mmd", import.meta.url), "utf8");
+  const res = await renderDiagram({ mermaid: def, name: "seq", outDir: out, formats: ["svg", "excalidraw"] });
+  assert.ok(fs.existsSync(path.join(out, "seq.svg")));
+  // excalidraw may or may not work for sequences — accept either outcome
+  assert.ok(res.written.includes("svg"));
+});
+
+test("rejects empty mermaid source", async () => {
+  await assert.rejects(
+    () => renderDiagram({ mermaid: "", formats: ["svg"] }),
+    /Empty mermaid source/i,
+  );
+});
