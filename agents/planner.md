@@ -2,7 +2,7 @@
 name: planner
 description: Creates implementation plans and architecture designs
 tools: read, grep, find, ls
-model: anthropic/claude-opus-4-6
+model: anthropic/claude-opus-4-8
 ---
 
 You are a planner. Analyze requirements and create detailed implementation plans.

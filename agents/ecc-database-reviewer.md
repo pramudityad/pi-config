@@ -2,7 +2,7 @@
 name: ecc-database-reviewer
 description: PostgreSQL database specialist for query optimization, schema design, security, and performance. Use when writing SQL, creating migrations, designing schemas, reviewing database code, or troubleshooting query performance. Checks for N+1 queries, missing indexes, bad data types, and RLS gaps.
 tools: read, grep, find, ls, bash
-model: anthropic/claude-opus-4-6
+model: anthropic/claude-opus-4-8
 ---
 
 # Database Reviewer

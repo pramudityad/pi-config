@@ -59,7 +59,7 @@ function parseDSL(dsl: string): ParsedDiagram {
 		const title = titleMatch ? titleMatch[1] : undefined;
 		const bars: { label: string; value: number }[] = [];
 		for (let i = 1; i < lines.length; i++) {
-			const barMatch = lines[i].match(/^(.+?)\s*:\s*(-?\d+(?:\.\d+)?)$/);
+			const barMatch = lines[i].match(/^(.+?)\s*[:=]\s*(-?\d+(?:\.\d+)?)$/) || lines[i].match(/^(\S+)\s+(-?\d+(?:\.\d+)?)$/);
 			if (barMatch) {
 				bars.push({ label: barMatch[1].trim(), value: parseFloat(barMatch[2]) });
 			}
@@ -73,7 +73,7 @@ function parseDSL(dsl: string): ParsedDiagram {
 	const nodeMap = new Map<string, Node>();
 
 	const nodeRegex = /(\(\((.+?)\)\)|\{(.+?)\}|\((.+?)\)|\[(.+?)\])/g;
-	const edgeRegex = /(==>|-.->|--->|---)/;
+	const edgeRegex = /(==>|-.->|--->|---|-->)/
 
 	function addNode(raw: string): string {
 		let label = raw;
@@ -119,7 +119,7 @@ function parseDSL(dsl: string): ParsedDiagram {
 		let refIdx = 0;
 		for (let p = 0; p < parts.length; p++) {
 			const part = parts[p].trim();
-			if (part === "==>" || part === "-.->" || part === "--->" || part === "---") {
+			if (part === "==>" || part === "-.->" || part === "--->" || part === "---" || part === "-->") {
 				const from = nodeRefs[refIdx];
 				const to = nodeRefs[refIdx + 1];
 				if (from && to) {
@@ -390,7 +390,7 @@ function renderBarchart(diagram: ParsedDiagram, theme: any, maxWidth: number): s
 
 	// Title
 	if (diagram.title) {
-		lines.push(theme.fg("accent", theme.bold(diagram.title)));
+		lines.push(theme.fg("accent", diagram.title));
 		lines.push("");
 	}
 
@@ -524,7 +524,7 @@ export default function (pi: ExtensionAPI) {
 		renderCall(args, theme, _context) {
 			const typeLine = args.dsl?.trim().split("\n")[0] || "graph";
 			return new Text(
-				theme.fg("toolTitle", theme.bold("render_graph ")) + theme.fg("muted", typeLine),
+				theme.fg("toolTitle", "render_graph ") + theme.fg("muted", typeLine),
 				0,
 				0,
 			);

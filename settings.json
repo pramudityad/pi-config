@@ -1,11 +1,15 @@
 {
-  "lastChangelogVersion": "0.67.1",
-  "defaultProvider": "zai",
-  "defaultModel": "glm-5.1",
+  "lastChangelogVersion": "0.78.1",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "kimi-k2.6",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "theme": "monochrome-teal",
   "treeFilterMode": "all",
   "quietStartup": true,
-  "steeringMode": "one-at-a-time"
+  "steeringMode": "one-at-a-time",
+  "packages": [
+    "npm:pi-figma",
+    "git:github.com/mvanhorn/last30days-skill"
+  ]
 }

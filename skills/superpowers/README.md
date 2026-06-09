@@ -1,6 +1,8 @@
 # Pi Superpowers Skill Set
 
-A comprehensive set of discipline-enforcing process skills adapted from OpenCode's superpowers for Pi.
+A comprehensive set of discipline-enforcing process skills adapted from [obra/superpowers](https://github.com/obra/superpowers) v5.1.0 for Pi.
+
+> **Synced:** 2026-06-09 | **Upstream:** v5.1.0 | **Files:** 47
 
 ## Quick Start
 

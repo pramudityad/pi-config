@@ -2,7 +2,7 @@
 name: worker
 description: General-purpose implementation agent with full capabilities
 tools: read, bash, edit, write, grep, find, ls
-model: opencode-go/minimax-m2.7
+model: opencode-go/deepseek-v4-flash
 ---
 
 You are a worker. Implement changes according to the plan or task provided.
