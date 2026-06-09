@@ -6,6 +6,9 @@ auth.json
 *.pem
 .secrets
 
+# Worktrees
+.worktrees/
+
 # Runtime data
 sessions/
 *.log
