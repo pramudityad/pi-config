@@ -92,7 +92,7 @@ If Extension Mode is selected but the required roles are not covered, inform the
 
 ### 1. Read Plan Once
 - Extract all tasks with full text and context
-- Create todo items for each task
+- Create todo items for each task **and** a durable progress file `docs/plans/<plan-name>-progress.md` (one checkbox per task). Update it as each task completes — in-memory todos alone are lost on session end, which blocks resuming a crashed or handed-off run.
 
 ### 2. Per Task: Dispatch Implementer
 - Provide full task text + context
@@ -168,6 +168,8 @@ If multiple agents match a role, prefer the one with the broadest description (g
 ### Subagent Dispatch Patterns
 
 Use the `subagent` tool with these parameter shapes. `agentScope` defaults to `"user"`; set to `"both"` if your reviewer is a project-level agent.
+
+**Resumable chains:** When you express a multi-step task as a `chain`, the `subagent` tool persists progress to `.pi/runs/<id>.json` after every step. If a step fails, the result reports its `runId` — re-invoke with the same `chain` and that `runId` to skip already-completed steps and resume from the failure. This is the durable-state counterpart to the progress file for agent-driven work.
 
 **Implementer dispatch:**
 
@@ -371,7 +373,7 @@ You: All tasks complete. Using finishing-development skill...
 **Always:**
 - Ask user to select mode before starting
 - Verify tests pass before offering completion options
-- Track tasks (in conversation or write to `docs/plans/<plan-name>-tasks.md`)
+- Track tasks in a durable progress file `docs/plans/<plan-name>-progress.md` (mandatory — update per task, not just in-conversation todos, so a crashed or handed-off run resumes)
 - Escalate to user after 3 failed review cycles
 - Use finishing-development skill when all tasks complete
 

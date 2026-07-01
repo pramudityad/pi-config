@@ -25,6 +25,18 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { resolveConsensus } from "./consensus.ts";
 import { SessionCache, runSingleAgent as runAgent, finalText } from "./orchestrator.ts";
 import { createScratchpad, scratchpadNotice, cleanupScratchpad, newWorkflowId } from "./scratchpad.ts";
+import {
+	type RunState,
+	type StepRecord,
+	fingerprintSteps,
+	finalizeRunState,
+	initRunState,
+	loadRunState,
+	recordStep,
+	resumableSteps,
+	runStatePath,
+	saveRunState,
+} from "./runstate.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -235,6 +247,57 @@ function isFailedResult(r: SingleResult): boolean {
 	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
 }
 
+// ─── Durable run state (persist / resume) ──────────────────────────────
+
+function nowIso(): string {
+	return new Date().toISOString();
+}
+
+/** Compact a completed/failed SingleResult into a persistable StepRecord. */
+function toStepRecord(r: SingleResult, step: number, output: string): StepRecord {
+	return {
+		step,
+		agent: r.agent,
+		task: r.task,
+		status: isFailedResult(r) ? "failed" : "completed",
+		output,
+		errorMessage: r.errorMessage,
+		model: r.model,
+		usage: r.usage,
+	};
+}
+
+/** Rebuild a SingleResult from a persisted step so resumed steps still render. */
+function reconstructResult(rec: StepRecord): SingleResult {
+	const message = { role: "assistant", content: [{ type: "text", text: rec.output }] } as unknown as Message;
+	return {
+		agent: rec.agent,
+		agentSource: "unknown",
+		task: rec.task,
+		exitCode: rec.status === "completed" ? 0 : 1,
+		messages: [message],
+		stderr: rec.errorMessage ?? "",
+		usage: rec.usage ?? emptyUsage(),
+		model: rec.model,
+		stopReason: rec.status === "completed" ? undefined : "error",
+		errorMessage: rec.errorMessage,
+		step: rec.step,
+	};
+}
+
+/** Persist the final state of a non-resumable mode (audit trail). */
+function persistFinalState(
+	cwd: string,
+	runId: string,
+	mode: SubagentDetails["mode"],
+	results: SingleResult[],
+): void {
+	const state = initRunState(runId, mode, fingerprintSteps(results.map((r) => ({ agent: r.agent, task: r.task }))), nowIso());
+	results.forEach((r, i) => recordStep(state, toStepRecord(r, i + 1, finalText(r.messages)), nowIso()));
+	finalizeRunState(state, results.every((r) => !isFailedResult(r)) ? "completed" : "failed", nowIso());
+	saveRunState(cwd, state);
+}
+
 // ─── Params ──────────────────────────────────────────────────────────────
 
 const TaskItem = Type.Object({
@@ -280,6 +343,15 @@ const SubagentParams = Type.Object({
 	),
 	scratchpad: Type.Optional(Type.Boolean({ description: "Enable a shared file-based scratchpad for this workflow.", default: false })),
 	keepScratch: Type.Optional(Type.Boolean({ description: "Keep the scratchpad file after the run (debug). Default false.", default: false })),
+	runId: Type.Optional(
+		Type.String({
+			description:
+				"Resume a prior run by id, skipping already-completed steps (chain mode). The run is persisted to .pi/runs/<id>.json; a failed chain reports its id so it can be resumed.",
+		}),
+	),
+	persist: Type.Optional(
+		Type.Boolean({ description: "Persist durable run state to .pi/runs/ for resume/audit. Default: true.", default: true }),
+	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
 
@@ -406,12 +478,53 @@ export default function (pi: ExtensionAPI) {
 				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
 				const results: SingleResult[] = [];
 				let previousOutput = "";
+
+				// Durable run state: persist each step; resume skips completed ones.
+				const persist = params.persist ?? true;
+				const fingerprint = fingerprintSteps(params.chain.map((s) => ({ agent: s.agent, task: s.task })));
+				const runId = params.runId ?? newWorkflowId();
+				let reusable: StepRecord[] = [];
+				let state: RunState | null = null;
+				if (persist) {
+					const prior = params.runId ? loadRunState(ctx.cwd, runId) : null;
+					if (prior) {
+						const r = resumableSteps(prior, fingerprint);
+						if (r === null) {
+							return {
+								content: [
+									{
+										type: "text",
+										text: `Cannot resume runId "${runId}": the chain differs from the recorded run. Omit runId to start fresh.`,
+									},
+								],
+								details: makeDetails("chain")([]),
+								isError: true,
+							};
+						}
+						reusable = r;
+						state = prior;
+						state.status = "running";
+					} else {
+						state = initRunState(runId, "chain", fingerprint, nowIso());
+					}
+					saveRunState(ctx.cwd, state);
+				}
+
 				try {
 					for (let i = 0; i < params.chain.length; i++) {
 						const step = params.chain[i];
+
+						// Resume: reuse a previously completed leading step.
+						const reused = reusable[i];
+						if (reused && reused.status === "completed") {
+							results.push(reconstructResult(reused));
+							previousOutput = reused.output;
+							continue;
+						}
+
 						const agent = agents.find((a) => a.name === step.agent);
 						if (!agent) {
-							results.push({
+							const sr: SingleResult = {
 								agent: step.agent,
 								agentSource: "unknown",
 								task: step.task,
@@ -420,7 +533,13 @@ export default function (pi: ExtensionAPI) {
 								stderr: `Unknown agent: "${step.agent}"`,
 								usage: emptyUsage(),
 								step: i + 1,
-							});
+							};
+							results.push(sr);
+							if (state) {
+								recordStep(state, toStepRecord(sr, i + 1, ""), nowIso());
+								finalizeRunState(state, "failed", nowIso());
+								saveRunState(ctx.cwd, state);
+							}
 							return {
 								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): unknown agent` }],
 								details: makeDetails("chain")(results),
@@ -443,14 +562,32 @@ export default function (pi: ExtensionAPI) {
 						}, cache);
 						const sr = toSingleResult(agent, task, run, i + 1);
 						results.push(sr);
+						const stepOutput = finalText(run.messages);
+						if (state) {
+							recordStep(state, toStepRecord(sr, i + 1, stepOutput), nowIso());
+							saveRunState(ctx.cwd, state);
+						}
 						if (isFailedResult(sr)) {
+							if (state) {
+								finalizeRunState(state, "failed", nowIso());
+								saveRunState(ctx.cwd, state);
+							}
+							const resumeHint = persist
+								? `\n\nResume after fixing with runId: "${runId}" (state: ${runStatePath(ctx.cwd, runId)})`
+								: "";
 							return {
-								content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${sr.errorMessage || "(no output)"}` }],
+								content: [
+									{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${sr.errorMessage || "(no output)"}${resumeHint}` },
+								],
 								details: makeDetails("chain")(results),
 								isError: true,
 							};
 						}
-						previousOutput = finalText(run.messages);
+						previousOutput = stepOutput;
+					}
+					if (state) {
+						finalizeRunState(state, "completed", nowIso());
+						saveRunState(ctx.cwd, state);
 					}
 					return {
 						content: [{ type: "text", text: finalText(results[results.length - 1].messages) || "(no output)" }],
@@ -533,6 +670,7 @@ export default function (pi: ExtensionAPI) {
 					const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
 					return `[${r.agent}] ${!isFailedResult(r) ? "completed" : "failed"}: ${preview || "(no output)"}`;
 				});
+				if (params.persist ?? true) persistFinalState(ctx.cwd, params.runId ?? newWorkflowId(), "parallel", results);
 				return {
 					content: [
 						{
@@ -577,6 +715,7 @@ export default function (pi: ExtensionAPI) {
 						implTask = `Address this review feedback and revise:\n\n${verdict}` + (scratchPath ? scratchpadNotice(scratchPath) : "");
 					}
 					const summary = approved ? "Review passed." : `Review did not converge within ${maxIterations} iterations.`;
+					if (params.persist ?? true) persistFinalState(ctx.cwd, params.runId ?? newWorkflowId(), "review", results);
 					return {
 						content: [{ type: "text", text: `${summary}\n\n${finalText(results[results.length - 1].messages)}` }],
 						details: makeDetails("chain")(results),
@@ -610,6 +749,7 @@ export default function (pi: ExtensionAPI) {
 				if (verdict.status === "agreed") text = `Consensus (unanimous, ${voters} voters): ${verdict.answer}`;
 				else if (verdict.status === "majority") text = `Consensus (majority): ${verdict.answer}\nDissenting: ${verdict.dissenters.join(" | ")}`;
 				else text = `No consensus (tie). Answers:\n${verdict.all.map((a, i) => `  ${i + 1}. ${a}`).join("\n")}`;
+				if (params.persist ?? true) persistFinalState(ctx.cwd, params.runId ?? newWorkflowId(), "consensus", results);
 				return {
 					content: [{ type: "text", text }],
 					details: makeDetails("parallel")(results),
