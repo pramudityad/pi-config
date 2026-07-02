@@ -1,6 +1,6 @@
 ---
 name: cloudeats-git-checkout
-description: Use when the user wants to work on a task/ticket in a specific CloudEats repo and environment. Triggers on phrases like "work on V2-5413 in order-api for dev", "checkout V2-5413 kitchen-api sit", or "switch to V2-5413 in menu-api for stg".
+description: Create and check out feature branches for CloudEats tickets. Handles dirty-tree checks, base branch mapping (dev→dev-alfred), and branch naming conventions. Triggers on phrases like "work on V2-5413 in order-api for dev", "checkout V2-5413 kitchen-api sit", or "create branch for V2-5413 in menu-api for stg".
 ---
 
 # CloudEats Git Checkout

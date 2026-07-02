@@ -2,7 +2,7 @@
 name: reviewer
 description: Code review and quality assurance
 tools: read, grep, find, ls, bash
-model: anthropic/claude-opus-4-8
+model: opencode-go/kimi-k2.7-code
 ---
 
 You are a code reviewer. Thoroughly review code changes for quality, correctness, and maintainability.

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage, Message } from "@mariozechner/pi-agent-core";
 
@@ -103,6 +103,29 @@ function shortenPath(p: string): string {
 	return p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
+// Budget thresholds as a % of the model's context window.
+const BUDGET_WARN_PERCENT = 70;
+const BUDGET_CRITICAL_PERCENT = 85;
+
+function budgetStatus(percent: number): { label: string; hint: string } {
+	if (percent >= BUDGET_CRITICAL_PERCENT) return { label: "CRITICAL", hint: "Run /context compact now." };
+	if (percent >= BUDGET_WARN_PERCENT) return { label: "high", hint: "Consider /context compact soon." };
+	return { label: "ok", hint: "" };
+}
+
+/** Fire-and-forget compaction with user-visible progress notifications. */
+function triggerCompaction(ctx: ExtensionCommandContext): void {
+	if (typeof ctx.compact !== "function") {
+		ctx.ui.notify("Compaction is not available in this context.", "warning");
+		return;
+	}
+	ctx.ui.notify("Compacting context…", "info");
+	ctx.compact({
+		onComplete: () => ctx.ui.notify("Context compacted.", "info"),
+		onError: (err) => ctx.ui.notify(`Compaction failed: ${err.message}`, "error"),
+	});
+}
+
 export default function contextInspector(pi: ExtensionAPI): void {
 	// In-memory state
 	let latestMessages: Message[] = [];
@@ -145,9 +168,15 @@ export default function contextInspector(pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("context", {
-		description: "Inspect the current context window (use '/context dump' to save full JSON)",
+		description: "Inspect the context window ('/context dump' saves full JSON, '/context compact' compacts now)",
 		handler: async (args, ctx) => {
-			const isDump = args?.trim().toLowerCase() === "dump";
+			const sub = args?.trim().toLowerCase() ?? "";
+			const isDump = sub === "dump";
+
+			if (sub === "compact") {
+				triggerCompaction(ctx);
+				return;
+			}
 
 			if (latestMessages.length === 0) {
 				ctx.ui.notify("No context captured yet. Send a message first.", "info");
@@ -191,8 +220,16 @@ export default function contextInspector(pi: ExtensionAPI): void {
 			report += `  Tool results:       ~${formatTokenCount(tokens.toolResult)}\n`;
 			report += `  Total:              ~${formatTokenCount(tokens.total)}\n`;
 
-			if (realUsage) {
-				report += `\n  Real usage:         ${formatTokenCount(realUsage.tokens)} tokens\n`;
+			let overBudget = false;
+			let usagePct = 0;
+			if (realUsage && realUsage.tokens != null) {
+				usagePct =
+					realUsage.percent ??
+					(realUsage.contextWindow ? (realUsage.tokens / realUsage.contextWindow) * 100 : 0);
+				const status = budgetStatus(usagePct);
+				overBudget = usagePct >= BUDGET_CRITICAL_PERCENT;
+				report += `\n  Real usage:         ${formatTokenCount(realUsage.tokens)} / ${formatTokenCount(realUsage.contextWindow)} tokens (${Math.round(usagePct)}%, ${status.label})\n`;
+				if (status.hint) report += `                      ${status.hint}\n`;
 			}
 
 			// Messages section
@@ -230,7 +267,15 @@ export default function contextInspector(pi: ExtensionAPI): void {
 				}
 			}
 
-			ctx.ui.notify(report, "info");
+			ctx.ui.notify(report, overBudget ? "warning" : "info");
+
+			if (overBudget && ctx.hasUI) {
+				const ok = await ctx.ui.confirm(
+					"Compact context now?",
+					`Context is at ${Math.round(usagePct)}% of the window. Compaction summarizes older turns to free space.`,
+				);
+				if (ok) triggerCompaction(ctx);
+			}
 		},
 	});
 }

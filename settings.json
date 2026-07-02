@@ -1,7 +1,7 @@
 {
-  "lastChangelogVersion": "0.78.1",
+  "lastChangelogVersion": "0.80.3",
   "defaultProvider": "opencode-go",
-  "defaultModel": "kimi-k2.6",
+  "defaultModel": "deepseek-v4-flash",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": false,
   "theme": "monochrome-teal",
@@ -10,6 +10,8 @@
   "steeringMode": "one-at-a-time",
   "packages": [
     "npm:pi-figma",
-    "git:github.com/mvanhorn/last30days-skill"
+    "git:github.com/mvanhorn/last30days-skill",
+    "npm:pi-search-hub",
+    "git:github.com/DietrichGebert/ponytail"
   ]
 }

@@ -1,6 +1,6 @@
 ---
 name: ecc-context-switch
-description: Quick context switching between CloudEats repos, worktrees, and active tasks. Triggers on phrases like "switch to", "what am I working on", "active branches", "where is DP-7168".
+description: Show a dashboard of active work across all CloudEats repos and worktrees. Find where a ticket is checked out, view uncommitted changes, and quick-switch between existing contexts. Triggers on phrases like "what am I working on", "active branches", "where is DP-7168", or "show my work status".
 ---
 
 # Context Switch

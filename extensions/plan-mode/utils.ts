@@ -136,13 +136,12 @@ export function extractTodoItems(message: string): TodoItem[] {
 	if (!headerMatch) return items;
 
 	const planSection = message.slice(message.indexOf(headerMatch[0]) + headerMatch[0].length);
-	const numberedPattern = /^\s*(\d+)[.)]\s+\*{0,2}([^*\n]+)/gm;
+	// Capture the whole line after "N." — cleanStepText() strips inline markdown
+	// (**bold**, *italic*, `code`). Capturing only up to the first `*` truncated steps.
+	const numberedPattern = /^\s*(\d+)[.)]\s+(.+)$/gm;
 
 	for (const match of planSection.matchAll(numberedPattern)) {
-		const text = match[2]
-			.trim()
-			.replace(/\*{1,2}$/, "")
-			.trim();
+		const text = match[2].trim();
 		if (text.length > 5 && !text.startsWith("`") && !text.startsWith("/") && !text.startsWith("-")) {
 			const cleaned = cleanStepText(text);
 			if (cleaned.length > 3) {
@@ -199,4 +198,9 @@ export function runTests(): void {
 	} else {
 		console.error("✗ Todo state incorrect");
 	}
+
+	// Test 4: inline markdown must not truncate step text
+	const bold = extractTodoItems("Plan:\n1. Update **config.json** keys\n2. Run `npm test`");
+	const boldOk = bold[0]?.text === "Update config.json keys" && bold[1]?.text === "Run npm test";
+	console.log(boldOk ? "✓ Inline markdown preserved" : `✗ Inline markdown truncated: ${JSON.stringify(bold.map((t) => t.text))}`);
 }

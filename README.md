@@ -6,7 +6,7 @@ My custom [pi](https://github.com/marioishikawa/pi) coding agent configuration.
 
 ```
 .
-├── agents/           # Custom agent definitions (10 agents)
+├── agents/           # Custom agent definitions (11 agents)
 ├── skills/           # Custom skills for specialized tasks
 │   ├── browser-use/  # Autonomous web agent (LLM-driven)
 │   ├── clickup/
@@ -58,6 +58,7 @@ git commit -m "feat: update agent configuration"
 | `ecc-architect` | System architecture design |
 | `ecc-backend-reviewer` | Backend code review |
 | `ecc-build-error-resolver` | Fix build errors |
+| `ecc-database-reviewer` | PostgreSQL review: queries, schema, indexes, RLS |
 | `ecc-e2e-runner` | E2E test execution |
 | `ecc-refactor-cleaner` | Code refactoring |
 | `ecc-security-reviewer` | Security audits |
@@ -93,11 +94,11 @@ git commit -m "feat: update agent configuration"
 - `writing-skills` - Skill development
 
 ### Browser & Web
+- `web_search` / `web_read` - Web search + URL→markdown via the `pi-search-hub` extension (multi-backend, auto-fallback, RRF combine)
 - `browser-use` - Autonomous web agent (LLM-driven browsing)
 - `browser-tools` - Scripted browser automation (CDP)
 
 ### Pi Skills
-- `brave-search` - Web search
 - `gccli` - Google Calendar
 - `gdcli` - Google Drive
 - `gmcli` - Gmail
