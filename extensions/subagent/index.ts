@@ -18,12 +18,19 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
 import { resolveConsensus } from "./consensus.ts";
 import { SessionCache, runSingleAgent as runAgent, finalText } from "./orchestrator.ts";
+import { compactError } from "./errors.ts";
+import {
+	CONSENSUS_ANSWER_CONTRACT,
+	REVIEW_VERDICT_CONTRACT,
+	extractAnswer,
+	extractVerdict,
+} from "./structured.ts";
 import { createScratchpad, scratchpadNotice, cleanupScratchpad, newWorkflowId } from "./scratchpad.ts";
 import {
 	type RunState,
@@ -41,6 +48,11 @@ import {
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
+
+// Pre-dispatch guard: subagent results are folded back into THIS context, so
+// fanning out when the parent is already near capacity risks overflow. Above
+// this % of the context window we refuse (or confirm) before dispatching.
+const FANOUT_BUDGET_GUARD_PERCENT = 85;
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -247,6 +259,45 @@ function isFailedResult(r: SingleResult): boolean {
 	return r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
 }
 
+/**
+ * Pre-dispatch budget guard for fan-out modes. Each subagent's output is folded
+ * back into the parent context, so dispatching many runs when the parent is
+ * already near capacity risks overflow. When usage is at/above the threshold,
+ * confirm (in a UI) or refuse (headless) before spawning. Returns a short-circuit
+ * tool result to abort the mode, or null to proceed.
+ */
+async function guardFanoutBudget(
+	ctx: ExtensionContext,
+	plannedRuns: number,
+	detailsFor: (results: SingleResult[]) => SubagentDetails,
+): Promise<AgentToolResult<SubagentDetails> | null> {
+	const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
+	if (!usage || usage.percent == null || usage.percent < FANOUT_BUDGET_GUARD_PERCENT) return null;
+
+	const pct = Math.round(usage.percent);
+	const detail =
+		`Context is at ${pct}% of the window (${formatTokens(usage.tokens ?? 0)}/${formatTokens(usage.contextWindow)}). ` +
+		`Dispatching ${plannedRuns} subagent run${plannedRuns === 1 ? "" : "s"} folds their output back into this near-full context and risks overflow.`;
+
+	if (ctx.hasUI) {
+		const ok = await ctx.ui.confirm(
+			"Fan out anyway?",
+			`${detail}\n\nRun /context compact first, or continue anyway?`,
+		);
+		if (ok) return null;
+		return {
+			content: [{ type: "text", text: `Canceled: ${detail} Run /context compact, then retry.` }],
+			details: detailsFor([]),
+			isError: true,
+		};
+	}
+	return {
+		content: [{ type: "text", text: `Refused: ${detail} Run /context compact (or reduce context) and retry.` }],
+		details: detailsFor([]),
+		isError: true,
+	};
+}
+
 // ─── Durable run state (persist / resume) ──────────────────────────────
 
 function nowIso(): string {
@@ -254,7 +305,7 @@ function nowIso(): string {
 }
 
 /** Compact a completed/failed SingleResult into a persistable StepRecord. */
-function toStepRecord(r: SingleResult, step: number, output: string): StepRecord {
+function toStepRecord(r: SingleResult, step: number, output: string, attempts?: number): StepRecord {
 	return {
 		step,
 		agent: r.agent,
@@ -262,6 +313,7 @@ function toStepRecord(r: SingleResult, step: number, output: string): StepRecord
 		status: isFailedResult(r) ? "failed" : "completed",
 		output,
 		errorMessage: r.errorMessage,
+		...(attempts && attempts > 1 ? { attempts } : {}),
 		model: r.model,
 		usage: r.usage,
 	};
@@ -351,6 +403,13 @@ const SubagentParams = Type.Object({
 	),
 	persist: Type.Optional(
 		Type.Boolean({ description: "Persist durable run state to .pi/runs/ for resume/audit. Default: true.", default: true }),
+	),
+	maxRetries: Type.Optional(
+		Type.Number({
+			description:
+				"Bounded self-heal: retries per failed step (chain steps and the review implementer). Each retry feeds the compacted error back into the task. Default 1; set 0 to disable.",
+			default: 1,
+		}),
 	),
 	cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
 });
@@ -466,7 +525,7 @@ export default function (pi: ExtensionAPI) {
 				const sr = toSingleResult(agent, params.task, run);
 				const isError = isFailedResult(sr);
 				return {
-					content: [{ type: "text", text: isError ? (sr.errorMessage || "(failed)") : (finalText(run.messages) || "(no output)") }],
+					content: [{ type: "text", text: isError ? compactError(sr.errorMessage ?? sr.stderr) : (finalText(run.messages) || "(no output)") }],
 					details: makeDetails("single")([sr]),
 					isError,
 				};
@@ -474,6 +533,8 @@ export default function (pi: ExtensionAPI) {
 
 			// ─── CHAIN ───────────────────────────────────────────────────────
 			if (params.chain && params.chain.length > 0) {
+				const chainGuard = await guardFanoutBudget(ctx, params.chain.length, makeDetails("chain"));
+				if (chainGuard) return chainGuard;
 				const cache = new SessionCache();
 				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
 				const results: SingleResult[] = [];
@@ -481,6 +542,7 @@ export default function (pi: ExtensionAPI) {
 
 				// Durable run state: persist each step; resume skips completed ones.
 				const persist = params.persist ?? true;
+				const maxRetries = params.maxRetries ?? 1;
 				const fingerprint = fingerprintSteps(params.chain.map((s) => ({ agent: s.agent, task: s.task })));
 				const runId = params.runId ?? newWorkflowId();
 				let reusable: StepRecord[] = [];
@@ -546,25 +608,35 @@ export default function (pi: ExtensionAPI) {
 								isError: true,
 							};
 						}
-						let task = step.task.replace(/\{previous\}/g, previousOutput);
-						if (scratchPath) task += scratchpadNotice(scratchPath);
-						const run = await runAgent(agent, task, {
-							cwd: step.cwd ?? ctx.cwd,
-							scratchpadPath: scratchPath,
-							signal,
-							onUpdate: onUpdate
-								? (msgs) =>
-									onUpdate({
-										content: [{ type: "text", text: finalText(msgs) }],
-										details: makeDetails("chain")([...results, { ...toSingleResult(agent, task, { messages: msgs, usage: emptyUsage() }, i + 1) }]),
-									})
-								: undefined,
-						}, cache);
-						const sr = toSingleResult(agent, task, run, i + 1);
+						// Bounded self-heal: retry a failed step, feeding the compacted
+						// error back into the task, up to `maxRetries` times.
+						const baseTask = step.task.replace(/\{previous\}/g, previousOutput) + (scratchPath ? scratchpadNotice(scratchPath) : "");
+						let task = baseTask;
+						let attemptsMade = 0;
+						let run!: Awaited<ReturnType<typeof runAgent>>;
+						let sr!: SingleResult;
+						while (true) {
+							run = await runAgent(agent, task, {
+								cwd: step.cwd ?? ctx.cwd,
+								scratchpadPath: scratchPath,
+								signal,
+								onUpdate: onUpdate
+									? (msgs) =>
+										onUpdate({
+											content: [{ type: "text", text: finalText(msgs) }],
+											details: makeDetails("chain")([...results, { ...toSingleResult(agent, task, { messages: msgs, usage: emptyUsage() }, i + 1) }]),
+										})
+									: undefined,
+							}, cache);
+							sr = toSingleResult(agent, task, run, i + 1);
+							attemptsMade++;
+							if (!isFailedResult(sr) || attemptsMade > maxRetries) break;
+							task = `${baseTask}\n\n[Retry ${attemptsMade}/${maxRetries}] Your previous attempt failed with:\n${compactError(sr.errorMessage ?? sr.stderr)}\nDiagnose the failure and try again.`;
+						}
 						results.push(sr);
 						const stepOutput = finalText(run.messages);
 						if (state) {
-							recordStep(state, toStepRecord(sr, i + 1, stepOutput), nowIso());
+							recordStep(state, toStepRecord(sr, i + 1, stepOutput, attemptsMade), nowIso());
 							saveRunState(ctx.cwd, state);
 						}
 						if (isFailedResult(sr)) {
@@ -575,9 +647,10 @@ export default function (pi: ExtensionAPI) {
 							const resumeHint = persist
 								? `\n\nResume after fixing with runId: "${runId}" (state: ${runStatePath(ctx.cwd, runId)})`
 								: "";
+							const attemptNote = attemptsMade > 1 ? ` after ${attemptsMade} attempts` : "";
 							return {
 								content: [
-									{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${sr.errorMessage || "(no output)"}${resumeHint}` },
+									{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent})${attemptNote}: ${compactError(sr.errorMessage ?? sr.stderr)}${resumeHint}` },
 								],
 								details: makeDetails("chain")(results),
 								isError: true,
@@ -611,6 +684,9 @@ export default function (pi: ExtensionAPI) {
 						],
 						details: makeDetails("parallel")([]),
 					};
+
+				const parallelGuard = await guardFanoutBudget(ctx, params.tasks.length, makeDetails("parallel"));
+				if (parallelGuard) return parallelGuard;
 
 				const allResults: SingleResult[] = new Array(params.tasks.length);
 				for (let i = 0; i < params.tasks.length; i++) {
@@ -694,21 +770,35 @@ export default function (pi: ExtensionAPI) {
 						isError: true,
 					};
 				}
+				const reviewGuard = await guardFanoutBudget(ctx, maxIterations * 2, makeDetails("chain"));
+				if (reviewGuard) return reviewGuard;
 				const cache = new SessionCache();
 				const scratchPath = params.scratchpad ? createScratchpad(ctx.cwd, newWorkflowId()) : undefined;
 				const results: SingleResult[] = [];
 				try {
 					let implTask = task + (scratchPath ? scratchpadNotice(scratchPath) : "");
 					let approved = false;
+					const maxRetries = params.maxRetries ?? 1;
 					for (let i = 0; i < maxIterations; i++) {
-						const ir = await runAgent(impl, implTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
-						results.push(toSingleResult(impl, implTask, ir, results.length + 1));
-						if (isFailedResult(results[results.length - 1])) break;
-						const reviewTask = `Review this work and reply with APPROVED on its own line if acceptable, otherwise list required changes:\n\n${finalText(ir.messages)}` + (scratchPath ? scratchpadNotice(scratchPath) : "");
+						// Bounded self-heal around the implementer run.
+						let attemptTask = implTask;
+						let ir = await runAgent(impl, attemptTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
+						let implResult = toSingleResult(impl, attemptTask, ir, results.length + 1);
+						for (let attempt = 1; attempt <= maxRetries && isFailedResult(implResult); attempt++) {
+							attemptTask = `${implTask}\n\n[Retry ${attempt}/${maxRetries}] Your previous attempt failed with:\n${compactError(implResult.errorMessage ?? implResult.stderr)}\nDiagnose the failure and try again.`;
+							ir = await runAgent(impl, attemptTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
+							implResult = toSingleResult(impl, attemptTask, ir, results.length + 1);
+						}
+						results.push(implResult);
+						if (isFailedResult(implResult)) break;
+						const reviewTask =
+							`Review this work. If it is acceptable as-is your verdict is APPROVED; otherwise list the required changes.\n\n${finalText(ir.messages)}` +
+							REVIEW_VERDICT_CONTRACT +
+							(scratchPath ? scratchpadNotice(scratchPath) : "");
 						const rr = await runAgent(rev, reviewTask, { cwd: ctx.cwd, scratchpadPath: scratchPath, signal }, cache);
 						results.push(toSingleResult(rev, reviewTask, rr, results.length + 1));
 						const verdict = finalText(rr.messages);
-						if (/^\s*APPROVED\s*$/m.test(verdict)) {
+						if (extractVerdict(verdict) === "approved") {
 							approved = true;
 							break;
 						}
@@ -716,8 +806,10 @@ export default function (pi: ExtensionAPI) {
 					}
 					const summary = approved ? "Review passed." : `Review did not converge within ${maxIterations} iterations.`;
 					if (params.persist ?? true) persistFinalState(ctx.cwd, params.runId ?? newWorkflowId(), "review", results);
+					const last = results[results.length - 1];
+					const lastText = finalText(last.messages) || (isFailedResult(last) ? compactError(last.errorMessage ?? last.stderr) : "(no output)");
 					return {
-						content: [{ type: "text", text: `${summary}\n\n${finalText(results[results.length - 1].messages)}` }],
+						content: [{ type: "text", text: `${summary}\n\n${lastText}` }],
 						details: makeDetails("chain")(results),
 						isError: !approved,
 					};
@@ -738,12 +830,18 @@ export default function (pi: ExtensionAPI) {
 						isError: true,
 					};
 				}
-				const tasks = Array.from({ length: Math.min(voters, MAX_PARALLEL_TASKS) }, () => task);
+				const voterCount = Math.min(voters, MAX_PARALLEL_TASKS);
+				const consensusGuard = await guardFanoutBudget(ctx, voterCount, makeDetails("parallel"));
+				if (consensusGuard) return consensusGuard;
+
+				// Each voter emits a trailing {answer} block; vote on that field, not prose.
+				const voterTask = task + CONSENSUS_ANSWER_CONTRACT;
+				const tasks = Array.from({ length: voterCount }, () => voterTask);
 				const runs = await mapWithConcurrencyLimit(tasks, MAX_CONCURRENCY, async (t) =>
 					runAgent(agent, t, { cwd: ctx.cwd, signal }),
 				);
 				const results = runs.map((r, i) => toSingleResult(agent, `vote ${i + 1}`, r, i + 1));
-				const answers = runs.map((r) => finalText(r.messages));
+				const answers = runs.map((r) => extractAnswer(finalText(r.messages)));
 				const verdict = resolveConsensus(answers);
 				let text: string;
 				if (verdict.status === "agreed") text = `Consensus (unanimous, ${voters} voters): ${verdict.answer}`;
