@@ -37,3 +37,4 @@ yarn.lock
 # OS
 .DS_Store
 .pi/scratch/
+figma.json
