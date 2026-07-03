@@ -4,7 +4,7 @@ Read-only exploration mode for safe code analysis.
 
 ## Features
 
-- **Read-only tools**: Restricts available tools to read, bash, grep, find, ls, question
+- **Read-only tools**: Restricts available tools to read, grep, find, ls, bash, ask_human
 - **Bash allowlist**: Only read-only bash commands are allowed
 - **Plan extraction**: Extracts numbered steps from `Plan:` sections
 - **Progress tracking**: Widget shows completion status during execution
@@ -37,12 +37,15 @@ Plan:
 ## How It Works
 
 ### Plan Mode (Read-Only)
-- Only read-only tools available
+- Only read-only tools available (`read`, `grep`, `find`, `ls`, `bash`, `ask_human`)
 - Bash commands filtered through allowlist
 - Agent creates a plan without making changes
+- Clarifying questions must go through the `ask_human` tool. If the agent asks in
+  plain text instead, it is automatically steered to re-ask via `ask_human` (once per
+  clarification episode) so the question actually reaches you
 
 ### Execution Mode
-- Full tool access restored
+- Full tool access restored (the session's original tool set, including custom tools)
 - Agent executes steps in order
 - `[DONE:n]` markers track completion
 - Widget shows progress
@@ -56,6 +59,8 @@ Safe commands (allowed):
 - Git read: `git status`, `git log`, `git diff`, `git branch`
 - Package info: `npm list`, `npm outdated`, `yarn info`
 - System info: `uname`, `whoami`, `date`, `uptime`
+- ClickUp read: `npx @krodak/clickup-cli task|sprint|summary|subtasks|comments|activity|tasks|overdue|inbox|search`
+- Jira read: `jiracli view`, `jiracli list`
 
 Blocked commands:
 - File modification: `rm`, `mv`, `cp`, `mkdir`, `touch`
@@ -63,3 +68,5 @@ Blocked commands:
 - Package install: `npm install`, `yarn add`, `pip install`
 - System: `sudo`, `kill`, `reboot`
 - Editors: `vim`, `nano`, `code`
+- ClickUp write: `clickup-cli update|comment|create|assign`
+- Jira write: `jiracli comment|transition|assign`

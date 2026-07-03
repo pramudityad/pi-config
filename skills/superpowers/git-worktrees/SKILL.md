@@ -209,10 +209,15 @@ Ready to implement auth feature
 ## Integration
 
 **Called by:**
-- **brainstorming** (Phase 4) - REQUIRED when design is approved and implementation follows
+- **brainstorming** (Phase 6) - REQUIRED after design approval, before writing-plans
 - **subagent-development** - REQUIRED before executing any tasks
 - **executing-plans** - REQUIRED before executing any tasks
 - Any skill needing isolated workspace
+
+**Typical flow:**
+```
+brainstorming → git-worktrees → writing-plans → executing-plans
+```
 
 **Pairs with:**
 - **finishing-development** - REQUIRED for cleanup after work complete

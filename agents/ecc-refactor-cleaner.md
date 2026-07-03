@@ -2,7 +2,7 @@
 name: ecc-refactor-cleaner
 description: Dead code cleanup and consolidation specialist. Runs analysis tools (knip, depcheck, ts-prune) to identify dead code, unused exports, and duplicate code, then safely removes them with test verification.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-sonnet-4-20250514
+model: opencode-go/deepseek-v4-pro
 ---
 
 # Refactor & Dead Code Cleaner

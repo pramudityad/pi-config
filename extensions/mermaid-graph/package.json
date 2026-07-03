@@ -1,0 +1,16 @@
+{
+  "name": "mermaid-graph-ext",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test 'test/**/*.test.mjs'"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "^0.18.1",
+    "@excalidraw/mermaid-to-excalidraw": "^2.2.2",
+    "esbuild": "^0.28.0",
+    "mermaid": "^11.15.0"
+  }
+}

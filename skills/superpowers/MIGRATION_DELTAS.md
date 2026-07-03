@@ -184,8 +184,34 @@ All core SKILL.md files adapted and migrated. No original files kept verbatim.
 3. Add more workflow examples
 4. Create skill usage analytics/log
 
+## v5.1.0 Sync (2026-06-09)
+
+Restored upstream content from [obra/superpowers](https://github.com/obra/superpowers) v5.1.0 to close gaps identified during audit:
+
+### Files Restored (20+ files)
+- Subagent prompt templates: `implementer-prompt.md`, `spec-reviewer-prompt.md`, `code-quality-reviewer-prompt.md`
+- Code reviewer template: `requesting-code-review/code-reviewer.md`
+- Systematic debugging: `condition-based-waiting-example.ts`, `find-polluter.sh`, `test-academic.md`, `test-pressure-{1,2,3}.md`
+- Visual companion: `visual-companion.md`, `spec-document-reviewer-prompt.md`, `scripts/*` (5 files)
+- Writing skills: `anthropic-best-practices.md`, `persuasion-principles.md`, `testing-skills-with-subagents.md`, `examples/CLAUDE_MD_TESTING.md`, `graphviz-conventions.dot`
+- Writing plans: `plan-document-reviewer-prompt.md`
+- Using skills: `references/pi-tools.md`
+- Bootstrap docs: `docs/pi-bootstrap.md`
+
+### Content Restored
+- **writing-skills**: Restored 65% missing content (CSO, token efficiency, bulletproofing, full checklist, anti-patterns, testing methodology) — 232 → 649 lines
+- **brainstorming**: Restored spec self-review, user review gate, decomposition logic, design-for-isolation, working-in-codebases — 91 → 151 lines
+- **receiving-code-review**: Replaced polite-acquiescence version with upstream anti-performative philosophy — 113 → 213 lines
+- **writing-plans**: Added Scope Check, File Structure, No Placeholders, Self-Review — 129 → ~200 lines
+- **finishing-development**: Added Detect Environment step, detached HEAD menu — 200 → ~270 lines
+- **using-skills**: Added SUBAGENT-STOP guard, Instruction Priority, Platform Adaptation — 100 → ~130 lines
+
+### Total Impact
+- Files: 27 → 50
+- SKILL.md total lines: 2,800 → 3,763
+
 ## References
 
-- Original: OpenCode Superpowers (`~/.config/opencode/skills/superpowers/`)
+- Original: [obra/superpowers](https://github.com/obra/superpowers) v5.1.0
 - Target: Pi Skills (`~/.pi/agent/skills/superpowers/`)
 - Specification: [Agent Skills standard](https://agentskills.io/specification)

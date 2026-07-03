@@ -3,6 +3,10 @@ name: using-skills
 description: Use when starting any conversation - establishes how to find and use skills before taking any action
 ---
 
+<SUBAGENT-STOP>
+If you were dispatched as a subagent to execute a specific task, skip this skill.
+</SUBAGENT-STOP>
+
 <EXTREMELY-IMPORTANT>
 If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST check for available skills.
 
@@ -11,11 +15,31 @@ IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
 This is not negotiable. This is not optional. You cannot rationalize your way out of this.
 </EXTREMELY-IMPORTANT>
 
+## Instruction Priority
+
+Superpowers skills override default system prompt behavior, but **user instructions always take precedence**:
+
+1. **User's explicit instructions** (.pi/CLAUDE.md, AGENTS.md, direct requests) — highest priority
+2. **Superpowers skills** — override default system behavior where they conflict
+3. **Default system prompt** — lowest priority
+
+If .pi/CLAUDE.md or AGENTS.md says "don't use TDD" and a skill says "always use TDD," follow the user's instructions. The user is in control.
+
 ## How to Access Skills
 
 **In Pi:** Use the `/skill:name` command to load a skill. Skills are also automatically loaded when the system prompt detects a match based on skill descriptions.
 
-**Loading skills:** When you invoke a skill, its content is loaded and presented to you—follow it directly.
+**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly. Never use the Read tool on skill files.
+
+**In Copilot CLI:** Use the `skill` tool. Skills are auto-discovered from installed plugins.
+
+**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.
+
+**In other environments:** Check your platform's documentation for how skills are loaded.
+
+## Platform Adaptation
+
+Skills use Pi-native tool names and conventions. Non-Pi platforms: see `references/pi-tools.md` for tool equivalents across Claude Code, Codex CLI, Copilot CLI, and Gemini CLI.
 
 ## The Rule
 

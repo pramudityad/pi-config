@@ -2,7 +2,8 @@
 name: ecc-e2e-runner
 description: End-to-end testing specialist using Playwright. Generates, maintains, and runs E2E tests. Manages test journeys, quarantines flaky tests, uploads artifacts, and ensures critical user flows work.
 tools: read, write, edit, bash, grep, find, ls
-model: anthropic/claude-sonnet-4-20250514
+skills: ecc-e2e-testing
+model: opencode-go/deepseek-v4-flash
 ---
 
 # E2E Test Runner

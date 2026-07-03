@@ -1,7 +1,17 @@
 {
-  "lastChangelogVersion": "0.57.1",
-  "defaultProvider": "zai",
-  "defaultModel": "glm-5",
+  "lastChangelogVersion": "0.80.3",
+  "defaultProvider": "opencode-go",
+  "defaultModel": "deepseek-v4-flash",
   "defaultThinkingLevel": "high",
-  "hideThinkingBlock": false
+  "hideThinkingBlock": false,
+  "theme": "monochrome-teal",
+  "treeFilterMode": "all",
+  "quietStartup": true,
+  "steeringMode": "one-at-a-time",
+  "packages": [
+    "npm:pi-figma",
+    "git:github.com/mvanhorn/last30days-skill",
+    "npm:pi-search-hub",
+    "git:github.com/DietrichGebert/ponytail"
+  ]
 }
